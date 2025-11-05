@@ -70,13 +70,17 @@ CREATE TABLE dwh.unified_companies (
     extracted_industry TEXT,
     processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+```
+
 Pipeline Architecture
-rust
+```
 Copy code
 ABR XML ----\
              \
               --> Staging (PostgreSQL) --> PySpark Transformation --> DWH (PostgreSQL)
 Common Crawl -/
+
+```
 Description:
 
 Data Extraction: extract_abr.py and extract_commoncrawl.py ingest raw data into staging tables.
@@ -89,7 +93,8 @@ Orchestration: Airflow DAG manages dependencies and scheduling.
 
 Notes: ABR is considered the primary source for company identity; Common Crawl enriches missing information (domain, industry).
 
-Technology Justification
+
+## Technology Justification
 Python: ETL scripting and orchestration.
 
 PostgreSQL: Reliable, ACID-compliant staging & DWH.
@@ -102,7 +107,7 @@ Airflow: DAG orchestration, dependency management, scheduling.
 
 Docker: Containerized reproducible environment.
 
-AI Model Used & Rationale
+## AI Model Used & Rationale
 LLM Used: OpenAI GPT-4o-mini
 
 Purpose: Confirm entity matching for borderline fuzzy matches (0.8 < score < 0.95).
@@ -112,34 +117,35 @@ Rationale: Fast, cost-effective, accurate confirmation of human-readable company
 Setup & Running Instructions
 Clone the repository
 
-bash
-Copy code
+```
 git clone <your-repo-url>
-cd "Firmable - Data Engineering Project"
+cd "Data Engineering Project"
+```
+
 Create a Python virtual environment
 
 bash
-Copy code
+```
 python -m venv .venv
 .venv\Scripts\activate  # Windows
 pip install -r requirements.txt
+```
 Set environment variables in .env
-
-pgsql
-Copy code
+```
 PG_DSN=postgresql://user:password@localhost:5432/dbname
 OPENAI_API_KEY=<your_openai_key>
+```
 Run extraction scripts
-
-bash
-Copy code
+```
 python scripts/extract_abr.py --source-uri "scripts/data/ABR.xml" --local-path "scripts/data/ABR.xml" --table stg.abr_bulk --batch-size 100 --save-raw
 python scripts/extract_commoncrawl.py
+```
+
 Run PySpark transformation
 
-bash
-Copy code
+```
 python scripts/pyspark_transformation.py
+```
 Orchestrate via Airflow (optional)
 
 Place etl_dag.py in your Airflow dags/ folder
@@ -182,3 +188,4 @@ VS Code for development, debugging, and Git integration.
 
 Author: Asaf Mohammed
 Date: 2025-11-05
+
