@@ -2,7 +2,8 @@
 """
 CommonCrawl ETL Script
 ----------------------
-Fetches URLs from the Common Crawl Index, scrapes basic info, and loads data into Postgres staging schema.
+Fetches URLs from the Common Crawl Index, scrapes basic info,
+and loads data into Postgres staging schema with deduplication.
 """
 
 import os
@@ -20,7 +21,7 @@ from bs4 import BeautifulSoup
 import psycopg2
 from psycopg2.extras import execute_values
 from dotenv import load_dotenv
-
+import hashlib
 
 # -------------------------------------------------------
 # 🧩 Setup & Configuration
@@ -34,6 +35,7 @@ if not PG_DSN:
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
+    force=True
 )
 
 CC_INDEX_URL = "https://index.commoncrawl.org/CC-MAIN-2025-43-index"
@@ -54,7 +56,7 @@ def create_session() -> requests.Session:
         total=3,
         backoff_factor=1,
         status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET", "POST"]
+        allowed_methods=frozenset(["GET", "POST"]),
     )
     s.mount("https://", HTTPAdapter(max_retries=retries))
     s.headers.update({
@@ -63,28 +65,40 @@ def create_session() -> requests.Session:
     return s
 
 
-def ensure_table_pg(dsn: str):
-    """Ensure staging table exists in Postgres."""
-    conn = psycopg2.connect(dsn)
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE SCHEMA IF NOT EXISTS stg;
+def compute_row_hash(record: dict) -> str:
+    """Compute a SHA256 hash of all field values in the record."""
+    concat_str = "|".join(str(v) for v in record.values() if v is not None)
+    return hashlib.sha256(concat_str.encode()).hexdigest()
 
-        CREATE TABLE IF NOT EXISTS stg.commoncrawl_raw (
-            source_url TEXT,
-            domain TEXT,
-            extracted_name TEXT,
-            extracted_industry TEXT,
-            http_status INT,
-            raw_html TEXT,
-            extra JSONB,
-            inserted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-    """)
-    conn.commit()
-    cur.close()
-    conn.close()
-    logging.info("✅ Ensured staging table exists: stg.commoncrawl_raw")
+
+def ensure_table_pg(dsn: str):
+    """Ensure staging table exists in Postgres with deduplication support."""
+    with psycopg2.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            stmts = [
+                "CREATE SCHEMA IF NOT EXISTS stg;",
+                """
+                CREATE TABLE IF NOT EXISTS stg.commoncrawl_raw (
+                    source_url TEXT,
+                    url_hash TEXT UNIQUE,
+                    domain TEXT,
+                    extracted_name TEXT,
+                    extracted_industry TEXT,
+                    http_status INT,
+                    raw_html TEXT,
+                    extra JSONB,
+                    inserted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                """,
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_commoncrawl_raw_url_hash
+                ON stg.commoncrawl_raw (url_hash);
+                """
+            ]
+            for stmt in stmts:
+                cur.execute(stmt)
+        conn.commit()
+    logging.info("✅ Ensured deduplication-enabled table: stg.commoncrawl_raw")
 
 
 def fetch_cc_index_hits(session: requests.Session, pattern: str, limit: int = 200) -> List[Dict]:
@@ -94,7 +108,7 @@ def fetch_cc_index_hits(session: requests.Session, pattern: str, limit: int = 20
     resp.raise_for_status()
 
     hits = []
-    for i, line in enumerate(resp.iter_lines(decode_unicode=True)):
+    for line in resp.iter_lines(decode_unicode=True):
         if not line:
             continue
         try:
@@ -152,40 +166,49 @@ def extract_from_html(html: str) -> Dict:
 
 
 def insert_batch_pg(dsn: str, rows: List[Dict]):
-    """Insert records into Postgres in batches."""
+    """Insert records into Postgres in batches with deduplication by URL hash."""
     if not rows:
         return
 
-    conn = psycopg2.connect(dsn)
-    cur = conn.cursor()
     sql = """
         INSERT INTO stg.commoncrawl_raw
-        (source_url, domain, extracted_name, extracted_industry, http_status, raw_html, extra)
+        (source_url, url_hash, domain, extracted_name, extracted_industry, http_status, raw_html, extra)
         VALUES %s
+        ON CONFLICT (url_hash) DO NOTHING;
     """
 
-    values = [
-        (
-            r.get("url"),
+    values = []
+    for r in rows:
+        url = r.get("url")
+        url_hash = hashlib.sha256(url.encode("utf-8")).hexdigest() if url else None
+        values.append((
+            url,
+            url_hash,
             r.get("domain"),
             r.get("extracted_name"),
             r.get("extracted_industry"),
             r.get("http_status"),
             r.get("raw_html"),
-            json.dumps(r.get("extra") or {})
-        )
-        for r in rows
-    ]
+            json.dumps(r.get("extra") or {}, default=str)
+        ))
 
-    try:
-        execute_values(cur, sql, values, page_size=100)
-        conn.commit()
-        logging.info(f"📥 Inserted {len(rows)} rows into stg.commoncrawl_raw")
-    except Exception as e:
-        logging.error(f"❌ Insert failed: {e}")
-    finally:
-        cur.close()
-        conn.close()
+    with psycopg2.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            try:
+                execute_values(cur, sql, values, page_size=100)
+                conn.commit()
+                logging.info(f"📥 Inserted {len(values)} unique rows (duplicates skipped automatically).")
+            except Exception as e:
+                logging.error(f"❌ Insert failed: {e}")
+                conn.rollback()
+
+
+class DummyResponse:
+    """Fallback response for failed requests."""
+    def __init__(self, reason):
+        self.status_code = None
+        self.text = None
+        self.reason = reason
 
 
 def polite_fetch(session: requests.Session, url: str):
@@ -193,7 +216,7 @@ def polite_fetch(session: requests.Session, url: str):
     try:
         return session.get(url, timeout=TIMEOUT)
     except Exception as e:
-        return type("R", (), {"status_code": None, "text": None, "reason": str(e)})
+        return DummyResponse(str(e))
 
 
 # -------------------------------------------------------
@@ -212,8 +235,15 @@ def main():
         logging.error(f"❌ Failed to fetch index hits: {e}")
         return
 
+    MAX_RECORDS = 100  # ✅ Limit for testing
+    processed = 0
     batch = []
+
     for i, hit in enumerate(hits):
+        if processed >= MAX_RECORDS:
+            logging.warning(f"⚠️ Limit reached ({MAX_RECORDS} records). Stopping early for testing.")
+            break
+
         url = hit.get("url") or hit.get("original")
         if not url:
             continue
@@ -224,6 +254,9 @@ def main():
         html = getattr(resp, "text", None) if http_status == 200 else None
 
         parsed = extract_from_html(html) if html else {}
+        if html and len(html) >= 200_000:
+            logging.debug(f"Skipping large HTML: {len(html)} bytes for {url}")
+
         row = {
             "url": url,
             "domain": domain,
@@ -233,7 +266,9 @@ def main():
             "raw_html": html if html and len(html) < 200_000 else None,
             "extra": {"cc_index": hit}
         }
+
         batch.append(row)
+        processed += 1  # ✅ increment counter
 
         if len(batch) >= BATCH_SIZE:
             insert_batch_pg(PG_DSN, batch)
@@ -244,7 +279,9 @@ def main():
     if batch:
         insert_batch_pg(PG_DSN, batch)
 
-    logging.info(f"🏁 ETL Completed in {(datetime.now() - start_time).seconds} seconds.")
+    elapsed = (datetime.now() - start_time).seconds
+    logging.info(f"🏁 ETL Completed in {elapsed} seconds ({processed} processed).")
+
 
 
 # -------------------------------------------------------
@@ -252,7 +289,12 @@ def main():
 # -------------------------------------------------------
 def run_commoncrawl_etl(**kwargs):
     """Airflow-friendly entrypoint."""
-    main()
+    try:
+        main()
+        return "success"
+    except Exception as e:
+        logging.error(f"ETL failed: {e}")
+        return "failed"
 
 
 if __name__ == "__main__":

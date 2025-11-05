@@ -1,0 +1,21 @@
+# Core ETL and data processing
+pandas==2.2.0
+pyspark==3.5.1
+lxml==4.9.3
+beautifulsoup4==4.12.2
+requests==2.32.0
+python-dotenv==1.0.1
+psycopg2-binary==2.9.7
+hashlib2==0.0.4
+
+# Airflow
+apache-airflow==2.9.1
+apache-airflow-providers-postgres==7.3.0
+
+# Optional: AI / fuzzy entity matching
+openai==1.9.1
+fuzzywuzzy[speedup]==0.18.0
+python-Levenshtein==0.21.2
+
+# Utilities
+tqdm==4.66.1

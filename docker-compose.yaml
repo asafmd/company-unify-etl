@@ -1,0 +1,21 @@
+version: '3.9'
+services:
+  airflow:
+    image: apache/airflow:2.7.1-python3.12
+    container_name: airflow
+    restart: always
+    environment:
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
+    volumes:
+      - ./scripts:/opt/airflow/dags   # your scripts folder with DAGs and .py scripts
+      - ./airflow_logs:/opt/airflow/logs
+    ports:
+      - "8080:8080"
+    command: >
+      bash -c "
+      airflow db init &&
+      airflow webserver --port 8080
+      "
