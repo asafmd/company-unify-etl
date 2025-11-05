@@ -1,79 +1,34 @@
-End-to-End Data Pipeline: ABR + Common Crawl + Company Unification
+Data Engineering Project
 
-This project demonstrates a complete data engineering workflow: extracting data from multiple sources, staging it in Postgres, performing transformations with PySpark, and orchestrating the pipeline using Apache Airflow.
+## Table of Contents
+1. [Project Overview](#project-overview)  
+2. [Database Schema (PostgreSQL DDL)](#database-schema-postgresql-ddl)  
+3. [Pipeline Architecture](#pipeline-architecture)  
+4. [Technology Justification](#technology-justification)  
+5. [AI Model Used & Rationale](#ai-model-used--rationale)  
+6. [Setup & Running Instructions](#setup--running-instructions)  
+7. [Python Scripts](#python-scripts)  
+8. [ETL Pipeline & Transformations](#etl-pipeline--transformations)  
+9. [Entity Matching & Design Choices](#entity-matching--design-choices)  
+10. [IDE Used](#ide-used)
 
-The project includes:
+---
 
-ABR ETL: Parse XML of Australian Business Register (ABR) data.
+## Project Overview
+This project demonstrates an end-to-end **data engineering pipeline** that unifies company data from multiple sources:
 
-Common Crawl ETL: Fetch and parse URLs for company data.
+- **ABR** (Australian Business Register XML files)  
+- **Common Crawl** (web scraped company data)
 
-PySpark Transformation: Unify company entities from both sources.
+The goal is to ingest, clean, and unify data into a **PostgreSQL Data Warehouse (DWH)**, enabling downstream analytics and reporting.
 
-Airflow DAG: Orchestrates the ETL and transformation processes.
+---
 
-📁 Project Structure
-Data-Engineering-Project/
-│
-├─ scripts/
-│   ├─ extract_abr.py                 # ETL script for ABR XML
-│   ├─ extract_commoncrawl.py         # ETL script for Common Crawl data
-│   ├─ pyspark_transformation.py      # PySpark unification/transformation
-│   ├─ dag_firmable_etl.py            # Airflow DAG orchestrating all tasks
-│   └─ data/
-│       └─ 20251029_Public01.xml      # Sample ABR XML (small subset)
-│
-├─ .env.example                       # Example environment variables
-├─ requirements.txt                   # Python dependencies
-├─ README.md
-└─ docker-compose.yml (optional)      # Airflow + Postgres container setup
+## Database Schema (PostgreSQL DDL)
 
-⚙️ Environment Setup
-1. Python Virtual Environment
-# Create and activate virtual environment
-python -m venv .venv
-source .venv/bin/activate       # Linux/macOS
-.venv\Scripts\activate          # Windows
-
-2. Install Dependencies
-pip install --upgrade pip
-pip install -r requirements.txt
-
-3. Environment Variables
-
-Copy .env.example to .env and update credentials:
-
-cp .env.example .env      # Linux/macOS
-copy .env.example .env    # Windows
-
-
-.env.example:
-
-# PostgreSQL DSN for staging and DWH
-PG_DSN=postgresql://user:password@localhost:5432/firmable_db
-PG_USER=user
-PG_PASSWORD=password
-PG_HOST=localhost
-PG_PORT=5432
-
-# Optional OpenAI API key for fuzzy name AI confirmation
-OPENAI_API_KEY=your_openai_api_key_here
-
-🛠 Database Setup
-
-Ensure you have a Postgres database running. Then create schemas:
-
--- Staging Schema
-CREATE SCHEMA IF NOT EXISTS stg;
-
--- DWH Schema
-CREATE SCHEMA IF NOT EXISTS dwh;
-
-
-Tables:
-
-stg.abr_bulk
-
+### Staging Tables
+```sql
+-- ABR staging
 DROP TABLE IF EXISTS stg.abr_bulk;
 CREATE TABLE stg.abr_bulk (
     abn TEXT PRIMARY KEY,
@@ -85,16 +40,14 @@ CREATE TABLE stg.abr_bulk (
     state TEXT,
     start_date DATE,
     end_date DATE,
-    processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-
-stg.commoncrawl_raw
-
+-- Common Crawl staging
 DROP TABLE IF EXISTS stg.commoncrawl_raw;
 CREATE TABLE stg.commoncrawl_raw (
     source_url TEXT,
-    url_hash TEXT UNIQUE,
+    url_hash TEXT PRIMARY KEY,
     domain TEXT,
     extracted_name TEXT,
     extracted_industry TEXT,
@@ -104,9 +57,7 @@ CREATE TABLE stg.commoncrawl_raw (
     inserted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-
-dwh.unified_companies
-
+-- Data Warehouse table
 DROP TABLE IF EXISTS dwh.unified_companies;
 CREATE TABLE dwh.unified_companies (
     abn TEXT,
@@ -119,73 +70,115 @@ CREATE TABLE dwh.unified_companies (
     extracted_industry TEXT,
     processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+Pipeline Architecture
+rust
+Copy code
+ABR XML ----\
+             \
+              --> Staging (PostgreSQL) --> PySpark Transformation --> DWH (PostgreSQL)
+Common Crawl -/
+Description:
 
-📦 Run ETL Scripts Manually
-1. ABR ETL
-python scripts/extract_abr.py \
-    --source-uri "scripts/data/20251029_Public01.xml" \
-    --local-path "scripts/data/20251029_Public01.xml" \
-    --table "stg.abr_bulk" \
-    --batch-size 100 \
-    --save-raw
+Data Extraction: extract_abr.py and extract_commoncrawl.py ingest raw data into staging tables.
 
-2. Common Crawl ETL
+Data Transformation: pyspark_transformation.py cleans, normalizes, and performs entity matching.
+
+Unification: The result is written to the DWH for analytics.
+
+Orchestration: Airflow DAG manages dependencies and scheduling.
+
+Notes: ABR is considered the primary source for company identity; Common Crawl enriches missing information (domain, industry).
+
+Technology Justification
+Python: ETL scripting and orchestration.
+
+PostgreSQL: Reliable, ACID-compliant staging & DWH.
+
+PySpark: Scalable transformations and fuzzy/AI-based entity matching.
+
+BeautifulSoup + Requests: Web scraping for Common Crawl.
+
+Airflow: DAG orchestration, dependency management, scheduling.
+
+Docker: Containerized reproducible environment.
+
+AI Model Used & Rationale
+LLM Used: OpenAI GPT-4o-mini
+
+Purpose: Confirm entity matching for borderline fuzzy matches (0.8 < score < 0.95).
+
+Rationale: Fast, cost-effective, accurate confirmation of human-readable company names.
+
+Setup & Running Instructions
+Clone the repository
+
+bash
+Copy code
+git clone <your-repo-url>
+cd "Firmable - Data Engineering Project"
+Create a Python virtual environment
+
+bash
+Copy code
+python -m venv .venv
+.venv\Scripts\activate  # Windows
+pip install -r requirements.txt
+Set environment variables in .env
+
+pgsql
+Copy code
+PG_DSN=postgresql://user:password@localhost:5432/dbname
+OPENAI_API_KEY=<your_openai_key>
+Run extraction scripts
+
+bash
+Copy code
+python scripts/extract_abr.py --source-uri "scripts/data/ABR.xml" --local-path "scripts/data/ABR.xml" --table stg.abr_bulk --batch-size 100 --save-raw
 python scripts/extract_commoncrawl.py
+Run PySpark transformation
 
-
-By default, it fetches a small batch (LIMIT=100) to stage in stg.commoncrawl_raw.
-
-3. PySpark Transformation
+bash
+Copy code
 python scripts/pyspark_transformation.py
+Orchestrate via Airflow (optional)
 
+Place etl_dag.py in your Airflow dags/ folder
 
-Reads both staging tables and writes unified company data to dwh.unified_companies.
+Start Airflow using Docker or local installation
 
-🚀 Airflow Orchestration
+Trigger DAG company_unification_etl
 
-The DAG (dag_firmable_etl.py) runs:
+Python Scripts
+extract_abr.py – Stream and insert ABR XML data into PostgreSQL staging.
 
-extract_abr.py
+extract_commoncrawl.py – Scrape and stage Common Crawl data.
 
-extract_commoncrawl.py (in parallel)
+pyspark_transformation.py – Normalize, fuzzy match, AI-confirm, and unify entities into DWH.
 
-pyspark_transformation.py (after staging is ready)
+ETL Pipeline & Transformations
+Normalizes company names: lowercasing, removing suffixes (Ltd, Pty, Inc).
 
-Using Docker
+Exact + fuzzy matching using difflib.SequenceMatcher.
 
-Start Airflow with Docker:
+AI-based confirmation for borderline matches.
 
-docker-compose up -d
+Writes unified table to dwh.unified_companies.
 
+Entity Matching & Design Choices
+Primary source: ABR data ensures canonical identity (abn as primary key).
 
-Copy your scripts/ folder to /opt/airflow/dags/ inside the container.
+Secondary source: Common Crawl enriches with domain and industry info.
 
-Open Airflow UI: http://localhost:8080
+Matching logic:
 
-Trigger the DAG: firmable_etl_dag
+Exact match on normalized names.
 
-📌 Notes
+Fuzzy match > 0.8.
 
-ETL scripts are batch-friendly (--batch-size) and can process partial datasets.
+AI confirmation for 0.8 < fuzzy score < 0.95.
 
-PySpark transformation performs exact + fuzzy + AI confirmation for company unification.
+IDE Used
+VS Code for development, debugging, and Git integration.
 
-All tables include deduplication and timestamps.
-
-Fully containerizable using Docker + Airflow + Postgres.
-
-Secrets are managed via .env.
-
-📝 References / Tools Used
-
-Python, Pandas, PySpark
-
-PostgreSQL
-
-BeautifulSoup, Requests, lxml
-
-Apache Airflow
-
-OpenAI API (optional for entity matching)
-
-Docker & Docker Compose
+Author: Asaf Mohammed
+Date: 2025-11-05
