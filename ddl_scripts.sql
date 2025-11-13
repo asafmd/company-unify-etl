@@ -1,53 +1,43 @@
 -- Staging table for raw ABR XML company data
-CREATE TABLE IF NOT EXISTS abr_company_raw (
-    id SERIAL PRIMARY KEY,
-    abn VARCHAR(20) UNIQUE,
-    name TEXT,
-    type TEXT,
-    status TEXT,
-    data JSONB,
-    source_file TEXT,
-    extracted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+CREATE SCHEMA IF NOT EXISTS stg;
+CREATE TABLE IF NOT EXISTS stg.abr_bulk (
+    abn TEXT,
+    entity_name TEXT,
+    entity_type TEXT,
+    entity_status TEXT,
+    address TEXT,
+    postcode TEXT,
+    state TEXT,
+    start_date DATE,
+    inserted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_stg_abr_bulk_abn ON stg.abr_bulk (abn);
 
 -- Staging table for raw Common Crawl company data
-CREATE TABLE IF NOT EXISTS commoncrawl_company_raw (
-    id SERIAL PRIMARY KEY,
+CREATE SCHEMA IF NOT EXISTS stg;
+CREATE TABLE IF NOT EXISTS stg.commoncrawl_raw (
+    source_url TEXT,
+    url_hash TEXT UNIQUE,
     domain TEXT,
-    company_name TEXT,
-    data JSONB,
-    source_file TEXT,
-    extracted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    extracted_name TEXT,
+    extracted_industry TEXT,
+    http_status INT,
+    raw_html TEXT,
+    extra JSONB,
+    inserted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_commoncrawl_raw_url_hash ON stg.commoncrawl_raw (url_hash);
 
--- Normalized company entities table (after fuzzy/AI matching/unification)
-CREATE TABLE IF NOT EXISTS company_normalized (
-    company_id SERIAL PRIMARY KEY,
-    canonical_name TEXT NOT NULL,
-    abn VARCHAR(20),
+-- Normalized company entities table (after fuzzy/AI matching/unification) -- DWH
+CREATE SCHEMA IF NOT EXISTS dwh;
+CREATE TABLE IF NOT EXISTS dwh.unified_companies (
+    abn TEXT,
+    entity_name TEXT,
+    entity_type TEXT,
+    address TEXT,
+    postcode TEXT,
+    state TEXT,
     domain TEXT,
-    country TEXT,
-    source_ids JSONB,
-    metadata JSONB,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- Table for alternate/spellings/aliases/domains
-CREATE TABLE IF NOT EXISTS company_aliases (
-    alias_id SERIAL PRIMARY KEY,
-    company_id INT REFERENCES company_normalized(company_id) ON DELETE CASCADE,
-    alias_name TEXT,
-    alias_domain TEXT,
-    source TEXT,
-    UNIQUE (company_id, alias_name, alias_domain)
-);
-
--- ETL pipeline run log
-CREATE TABLE IF NOT EXISTS etl_log (
-    run_id SERIAL PRIMARY KEY,
-    job_name TEXT,
-    status TEXT,
-    started_at TIMESTAMP,
-    finished_at TIMESTAMP,
-    log TEXT
+    extracted_industry TEXT,
+    processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
